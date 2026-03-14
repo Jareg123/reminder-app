@@ -8,6 +8,7 @@ class Event {
   final String? reminderAt;
   final int isActive;
   final int isDone;
+  final String? recurrence; // повторение в минутах: '60', '240', '1440' и т.д.
 
   Event({
     this.id,
@@ -16,6 +17,7 @@ class Event {
     this.reminderAt,
     this.isActive = 1,
     this.isDone = 0,
+    this.recurrence,
   });
 
   factory Event.fromMap(Map<String, dynamic> map) {
@@ -26,6 +28,7 @@ class Event {
       reminderAt: map['reminder_at'],
       isActive: map['is_active'] ?? 1,
       isDone: map['is_done'] ?? 0,
+      recurrence: map['recurrence'],
     );
   }
 
@@ -36,6 +39,7 @@ class Event {
       'reminder_at': reminderAt,
       'is_active': isActive,
       'is_done': isDone,
+      'recurrence': recurrence,
     };
   }
 
@@ -46,6 +50,7 @@ class Event {
     String? reminderAt,
     int? isActive,
     int? isDone,
+    Object? recurrence = _sentinel,
   }) {
     return Event(
       id: id ?? this.id,
@@ -54,9 +59,13 @@ class Event {
       reminderAt: reminderAt ?? this.reminderAt,
       isActive: isActive ?? this.isActive,
       isDone: isDone ?? this.isDone,
+      recurrence: recurrence == _sentinel ? this.recurrence : recurrence as String?,
     );
   }
 }
+
+// Sentinel для copyWith чтобы null мог сбросить recurrence
+const Object _sentinel = Object();
 
 class DB {
   static Database? _database;
@@ -72,7 +81,7 @@ class DB {
 
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE events (
@@ -81,23 +90,34 @@ class DB {
             created_at TEXT,
             reminder_at TEXT,
             is_active INTEGER,
-            is_done INTEGER DEFAULT 0
+            is_done INTEGER DEFAULT 0,
+            recurrence TEXT
           )
         ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
+        final cols = await db.rawQuery("PRAGMA table_info(events)");
+        final colNames = cols.map((c) => c['name'] as String).toList();
+
         if (oldVersion < 2) {
-          final cols = await db.rawQuery("PRAGMA table_info(events)");
-          final colNames = cols.map((c) => c['name'] as String).toList();
           if (!colNames.contains('is_done')) {
             await db.execute("ALTER TABLE events ADD COLUMN is_done INTEGER DEFAULT 0");
+          }
+        }
+        if (oldVersion < 3) {
+          if (!colNames.contains('recurrence')) {
+            await db.execute("ALTER TABLE events ADD COLUMN recurrence TEXT");
           }
         }
       },
     );
   }
 
-  static Future<int> addEvent(String content, {String? reminderAt}) async {
+  static Future<int> addEvent(
+    String content, {
+    String? reminderAt,
+    String? recurrence,
+  }) async {
     final db = await database;
     final now = DateTime.now();
     final createdAt =
@@ -110,6 +130,7 @@ class DB {
       'reminder_at': reminderAt,
       'is_active': 1,
       'is_done': 0,
+      'recurrence': recurrence,
     });
   }
 
@@ -130,11 +151,29 @@ class DB {
     await db.update('events', {'is_done': newState}, where: 'id = ?', whereArgs: [id]);
   }
 
-  static Future<void> updateEvent(int id, String content, {String? reminderAt}) async {
+  static Future<void> updateEvent(
+    int id,
+    String content, {
+    String? reminderAt,
+    Object? recurrence = _sentinel,
+  }) async {
+    final db = await database;
+    final data = <String, dynamic>{
+      'content': content,
+      'reminder_at': reminderAt,
+    };
+    if (recurrence != _sentinel) {
+      data['recurrence'] = recurrence as String?;
+    }
+    await db.update('events', data, where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Обновляет только reminder_at — используется при авто-перепланировании
+  static Future<void> updateReminderAt(int id, String reminderAt) async {
     final db = await database;
     await db.update(
       'events',
-      {'content': content, 'reminder_at': reminderAt},
+      {'reminder_at': reminderAt},
       where: 'id = ?',
       whereArgs: [id],
     );
