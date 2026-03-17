@@ -1,19 +1,35 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- Разрешения для уведомлений -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <uses-permission android:name="android.permission.VIBRATE"/>
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- ── Уведомления ──────────────────────────────────────── -->
+    <!-- Показывать уведомления (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
-    <application
+    <!-- Точные будильники — БЕЗ этого exactAllowWhileIdle падает в релизе -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Android 12+ альтернатива (не требует диалога) -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
 
+    <!-- Разбудить CPU для показа уведомления -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Перезапустить уведомления после перезагрузки устройства -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Исключить из battery optimization (пользователь подтверждает) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- Вибрация -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!-- Сеть (если нужна) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application
         android:label="Reminder &amp; Notify"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -23,28 +39,57 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
+
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
         </activity>
 
-        <!-- Нужно для flutter_local_notifications -->
-        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+        <!-- flutter_local_notifications: BroadcastReceiver для точных будильников -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false"/>
+
+        <!-- flutter_local_notifications: перезапуск уведомлений после перезагрузки -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
                 <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <!-- Xiaomi/MIUI -->
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
-        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>
+
+        <!-- flutter_local_notifications: кнопки действий в уведомлениях -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false"/>
 
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+
+        <!-- Виджет маленький -->
+        <receiver
+            android:name=".HomeWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_medium_info"/>
+        </receiver>
+
+
     </application>
 </manifest>

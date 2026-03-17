@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@drawable/widget_bg">
+
+    <!-- Заголовок -->
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Задачи"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="#FF10B981"
+        android:layout_marginBottom="4dp"/>
+
+    <!-- Разделитель -->
+    <TextView
+        android:id="@+id/widget_divider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+        android:textSize="4sp"
+        android:textColor="#FFE8E8E8"
+        android:layout_marginBottom="4dp"
+        android:maxLines="1"/>
+
+    <!-- Пустое состояние -->
+    <TextView
+        android:id="@+id/empty_text"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:text="Нет предстоящих задач"
+        android:textSize="12sp"
+        android:textColor="#FF8E8E93"
+        android:gravity="center"
+        android:visibility="gone"/>
+
+    <!-- Строка 1 -->
+    <LinearLayout android:id="@+id/row1" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp" android:visibility="gone">
+        <TextView android:id="@+id/dot1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  " android:textSize="7sp" android:textColor="#FF10B981" android:layout_marginEnd="10dp"/>
+        <TextView android:id="@+id/title1" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textSize="13sp" android:textColor="#FF1D1D1F" android:maxLines="2" android:ellipsize="end"/>
+        <TextView android:id="@+id/time1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#FF10B981" android:textStyle="bold" android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+    <!-- Строка 2 -->
+    <LinearLayout android:id="@+id/row2" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp" android:visibility="gone">
+        <TextView android:id="@+id/dot2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  " android:textSize="7sp" android:textColor="#FF10B981" android:layout_marginEnd="10dp"/>
+        <TextView android:id="@+id/title2" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textSize="13sp" android:textColor="#FF1D1D1F" android:maxLines="2" android:ellipsize="end"/>
+        <TextView android:id="@+id/time2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#FF10B981" android:textStyle="bold" android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+    <!-- Строка 3 -->
+    <LinearLayout android:id="@+id/row3" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp" android:visibility="gone">
+        <TextView android:id="@+id/dot3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  " android:textSize="7sp" android:textColor="#FF10B981" android:layout_marginEnd="10dp"/>
+        <TextView android:id="@+id/title3" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textSize="13sp" android:textColor="#FF1D1D1F" android:maxLines="2" android:ellipsize="end"/>
+        <TextView android:id="@+id/time3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#FF10B981" android:textStyle="bold" android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+    <!-- Строка 4 -->
+    <LinearLayout android:id="@+id/row4" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp" android:visibility="gone">
+        <TextView android:id="@+id/dot4" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  " android:textSize="7sp" android:textColor="#FF10B981" android:layout_marginEnd="10dp"/>
+        <TextView android:id="@+id/title4" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textSize="13sp" android:textColor="#FF1D1D1F" android:maxLines="2" android:ellipsize="end"/>
+        <TextView android:id="@+id/time4" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#FF10B981" android:textStyle="bold" android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+    <!-- Строка 5 -->
+    <LinearLayout android:id="@+id/row5" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp" android:visibility="gone">
+        <TextView android:id="@+id/dot5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  " android:textSize="7sp" android:textColor="#FF10B981" android:layout_marginEnd="10dp"/>
+        <TextView android:id="@+id/title5" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textSize="13sp" android:textColor="#FF1D1D1F" android:maxLines="2" android:ellipsize="end"/>
+        <TextView android:id="@+id/time5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#FF10B981" android:textStyle="bold" android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+</LinearLayout>

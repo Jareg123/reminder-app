@@ -1,7 +1,9 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -10,14 +12,38 @@ class NotificationService {
 
   static const Color accentGreen = Color(0xFF10B981);
 
-  // ── Инициализация ──────────────────────────────────────────
+  static void _log(String msg) {
+    if (kDebugMode) debugPrint('[Notify] $msg');
+  }
+
   static Future<void> init() async {
     if (_initialized) return;
 
+    // Шаг 1: timezone
     try {
       tz.initializeTimeZones();
-    } catch (_) {}
+      _log('Timezones loaded');
+    } catch (e) {
+      _log('TZ init error: $e');
+    }
 
+    // Шаг 2: локальная зона
+    try {
+      final offset = DateTime.now().timeZoneOffset;
+      for (final loc in tz.timeZoneDatabase.locations.values) {
+        try {
+          if (tz.TZDateTime.now(loc).timeZoneOffset == offset) {
+            tz.setLocalLocation(loc);
+            _log('Local timezone: ${loc.name}');
+            break;
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      _log('TZ local error: $e');
+    }
+
+    // Шаг 3: плагин
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
@@ -25,24 +51,39 @@ class NotificationService {
     try {
       await _plugin.initialize(
         initSettings,
-        onDidReceiveNotificationResponse: (details) {},
+        onDidReceiveNotificationResponse: (details) {
+          _log('Notification tapped: ${details.id}');
+        },
       );
-    } catch (_) {
-      return; // не крашим приложение если плагин недоступен
+      _log('Plugin initialized');
+    } catch (e) {
+      _log('Plugin init FAILED: $e');
+      return;
     }
 
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
 
-    // Запрашиваем разрешения (молча — в релизе могут быть недоступны)
-    try { await android?.requestNotificationsPermission(); } catch (_) {}
-    try { await android?.requestExactAlarmsPermission(); } catch (_) {}
-    try { await android?.requestFullScreenIntentPermission(); } catch (_) {}
+    // Шаг 4: разрешения
+    try {
+      final granted = await android?.requestNotificationsPermission();
+      _log('Notification permission: $granted');
+    } catch (e) {
+      _log('Notification permission error: $e');
+    }
+
+    try {
+      final granted = await android?.requestExactAlarmsPermission();
+      _log('Exact alarm permission: $granted');
+    } catch (e) {
+      _log('Exact alarm permission error: $e');
+    }
 
     _initialized = true;
+    _log('Init complete');
   }
 
-  // ── Планирование уведомления ───────────────────────────────
+  // ── Планирование ───────────────────────────────────────────
   static Future<void> scheduleNotification({
     required int id,
     required String title,
@@ -50,20 +91,30 @@ class NotificationService {
     required DateTime scheduledTime,
   }) async {
     await init();
-    if (!_initialized) return;
-    if (scheduledTime.isBefore(DateTime.now())) return;
+    if (!_initialized) {
+      _log('SKIP schedule #$id — not initialized');
+      return;
+    }
+
+    if (scheduledTime.isBefore(DateTime.now())) {
+      _log('SKIP schedule #$id — time in past: $scheduledTime');
+      return;
+    }
 
     tz.TZDateTime tzScheduled;
     try {
       tzScheduled = tz.TZDateTime.from(scheduledTime, tz.local);
-    } catch (_) {
-      // Фолбэк на UTC если local timezone недоступен
+    } catch (e) {
+      _log('TZ convert error: $e, trying UTC');
       try {
         tzScheduled = tz.TZDateTime.from(scheduledTime, tz.UTC);
-      } catch (_) {
+      } catch (e2) {
+        _log('TZ UTC also failed: $e2');
         return;
       }
     }
+
+    _log('Scheduling #$id at $tzScheduled (local: $scheduledTime)');
 
     const androidDetails = AndroidNotificationDetails(
       'reminders_channel',
@@ -77,7 +128,6 @@ class NotificationService {
       colorized: true,
       playSound: true,
       enableVibration: true,
-      fullScreenIntent: true,
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.alarm,
       groupAlertBehavior: GroupAlertBehavior.all,
@@ -86,37 +136,57 @@ class NotificationService {
 
     const details = NotificationDetails(android: androidDetails);
 
-    // Пробуем exactAllowWhileIdle, при отказе — inexact (без точного будильника)
     try {
       await _plugin.zonedSchedule(
-        id,
-        title,
-        body,
-        tzScheduled,
-        details,
+        id, title, body, tzScheduled, details,
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
-    } catch (_) {
+      _log('Scheduled #$id OK (exact)');
+    } catch (e) {
+      _log('Exact schedule failed: $e, trying inexact');
       try {
         await _plugin.zonedSchedule(
-          id,
-          title,
-          body,
-          tzScheduled,
-          details,
+          id, title, body, tzScheduled, details,
           androidScheduleMode: AndroidScheduleMode.inexact,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
-      } catch (_) {
-        // Уведомления недоступны — не крашим приложение
+        _log('Scheduled #$id OK (inexact)');
+      } catch (e2) {
+        _log('BOTH schedule modes FAILED: $e2');
       }
     }
   }
 
-  // ── Безопасная обёртка для вызова из _save / _toggleDone ──
+  // ── Перепланировать все ────────────────────────────────────
+  static Future<void> rescheduleAll(List<dynamic> events) async {
+    await init();
+    if (!_initialized) return;
+    final now = DateTime.now();
+    int count = 0;
+    for (final event in events) {
+      try {
+        if (event.reminderAt == null || event.isDone == 1) continue;
+        final dt = DateFormat('yyyy-MM-dd HH:mm').parse(event.reminderAt!);
+        if (dt.isAfter(now)) {
+          await safeSchedule(
+            id: event.id!,
+            title: 'Напоминание',
+            body: event.content,
+            scheduledTime: dt,
+          );
+          count++;
+        }
+      } catch (e) {
+        _log('rescheduleAll error: $e');
+      }
+    }
+    _log('Rescheduled $count events');
+  }
+
+  // ── Безопасные обёртки ────────────────────────────────────
   static Future<void> safeSchedule({
     required int id,
     required String title,
@@ -126,14 +196,17 @@ class NotificationService {
     try {
       await scheduleNotification(
           id: id, title: title, body: body, scheduledTime: scheduledTime);
-    } catch (_) {}
+    } catch (e) {
+      _log('safeSchedule error: $e');
+    }
   }
 
-  // ── Безопасная отмена ─────────────────────────────────────
   static Future<void> safeCancel(int id) async {
     try {
       await cancelNotification(id);
-    } catch (_) {}
+    } catch (e) {
+      _log('safeCancel error: $e');
+    }
   }
 
   /// Мгновенное уведомление (для тестов)
@@ -157,7 +230,6 @@ class NotificationService {
       colorized: true,
       playSound: true,
       enableVibration: true,
-      fullScreenIntent: true,
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.alarm,
     );
@@ -165,12 +237,16 @@ class NotificationService {
     const details = NotificationDetails(android: androidDetails);
     try {
       await _plugin.show(id, title, body, details);
-    } catch (_) {}
+      _log('Instant #$id shown');
+    } catch (e) {
+      _log('Instant FAILED: $e');
+    }
   }
 
   static Future<void> cancelNotification(int id) async {
     await init();
     if (!_initialized) return;
     await _plugin.cancel(id);
+    _log('Cancelled #$id');
   }
 }

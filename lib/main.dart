@@ -1,9 +1,16 @@
+import 'dart:io';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'database.dart';
 import 'notification_service.dart';
+import 'package:home_widget/home_widget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'date_parser.dart';
 
 // ══════════════════════════════════════════════════════════════
 //  Глобальный переключатель темы
@@ -134,6 +141,15 @@ class AppColorScheme {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.init();
+
+  // Перепланируем все уведомления при старте.
+  // Android сбрасывает AlarmManager после перезагрузки устройства
+  // или убийства процесса battery optimizer'ом.
+  try {
+    final events = await DB.getAll();
+    await NotificationService.rescheduleAll(events);
+  } catch (_) {}
+
   runApp(const MyApp());
 }
 
@@ -152,7 +168,7 @@ class MyApp extends StatelessWidget {
         ));
 
         return MaterialApp(
-          title: 'Напоминалка',
+          title: 'Reminder & Notify',
           debugShowCheckedModeBanner: false,
           locale: const Locale('ru'),
           supportedLocales: const [Locale('ru')],
@@ -198,13 +214,13 @@ class MyApp extends StatelessWidget {
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected)
-                ? Colors.white
-                : Colors.grey.shade500),
+        states.contains(WidgetState.selected)
+            ? Colors.white
+            : Colors.grey.shade500),
         trackColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected)
-                ? c.primary
-                : c.border),
+        states.contains(WidgetState.selected)
+            ? c.primary
+            : c.border),
       ),
     );
   }
@@ -220,7 +236,7 @@ class EventsPage extends StatefulWidget {
   State<EventsPage> createState() => _EventsPageState();
 }
 
-class _EventsPageState extends State<EventsPage> {
+class _EventsPageState extends State<EventsPage> with WidgetsBindingObserver {
   List<Event> _events = [];
   bool _hideDone = false;
   bool _searchOpen = false;
@@ -231,19 +247,104 @@ class _EventsPageState extends State<EventsPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadEvents();
-  }
+    _loadHideDone();
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _requestBatteryOptimizationExemption();
+      });
+    }
+  }   // ← initState закрывается здесь
 
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    _searchFocus.dispose();
-    super.dispose();
+  /// Пишет ближайшие задачи в SharedPreferences для виджета
+  Future<void> _updateWidget() async {
+    try {
+      final now = DateTime.now();
+      final withTime = _events
+          .where((e) => e.isDone == 0 && e.reminderAt != null)
+          .toList()
+        ..sort((a, b) => a.reminderAt!.compareTo(b.reminderAt!));
+      final withoutTime = _events
+          .where((e) => e.isDone == 0 && e.reminderAt == null)
+          .toList();
+      final upcoming = [...withTime, ...withoutTime];
+
+      final count = upcoming.length > 5 ? 5 : upcoming.length;
+      await HomeWidget.saveWidgetData<int>('task_count', count);
+
+      for (int i = 0; i < 5; i++) {
+        if (i < count) {
+          final e = upcoming[i];
+          await HomeWidget.saveWidgetData<String>('task_title_$i', e.content);
+          await HomeWidget.saveWidgetData<String>('task_time_$i', e.reminderAt ?? '');
+
+          // Определяем цвет задачи
+          String color = '1D1D1F'; // по умолчанию — тёмный
+          if (e.reminderAt != null) {
+            try {
+              final dt = DateFormat('yyyy-MM-dd HH:mm').parse(e.reminderAt!);
+              if (dt.isBefore(now)) {
+                color = 'FF6B35'; // просрочено — оранжевый
+              }
+            } catch (_) {}
+          }
+          if (color == '1D1D1F' && e.labelColor != null) {
+            color = e.labelColor!; // цвет метки
+          }
+          await HomeWidget.saveWidgetData<String>('task_color_$i', color);
+        } else {
+          await HomeWidget.saveWidgetData<String>('task_title_$i', '');
+          await HomeWidget.saveWidgetData<String>('task_time_$i', '');
+          await HomeWidget.saveWidgetData<String>('task_color_$i', '');
+        }
+      }
+
+      await HomeWidget.updateWidget(qualifiedAndroidName: 'com.gladkov.reminder.HomeWidgetProvider');;
+    } catch (e) {
+      debugPrint('[Widget] update error: $e');
+    }
   }
 
   Future<void> _loadEvents() async {
     final events = await DB.getAll();
     setState(() => _events = events);
+    _updateWidget(); // ← вызов в конце
+  }
+
+  Future<void> _loadHideDone() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => _hideDone = prefs.getBool('hide_done') ?? false);
+  }
+
+  // Обновляем список при возврате в приложение —
+  // чтобы просроченные сразу окрасились в оранжевый
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadEvents();
+
+
+    }
+  }
+
+  // Просим пользователя исключить приложение из battery optimization.
+  // Без этого Android может убить процесс и уведомления перестанут приходить.
+  Future<void> _requestBatteryOptimizationExemption() async {
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.status;
+      if (!status.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
   }
 
   List<Event> get _visibleEvents {
@@ -322,21 +423,9 @@ class _EventsPageState extends State<EventsPage> {
   }
 
   Future<void> _deleteEvent(Event event) async {
-    final c = AppColorScheme.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => _ModernDialog(
-        title: 'Удалить событие?',
-        content: event.content,
-        confirmText: 'Удалить',
-        confirmColor: c.danger,
-      ),
-    );
-    if (confirmed == true) {
-      await NotificationService.safeCancel(event.id!);
-      await DB.deleteEvent(event.id!);
-      await _loadEvents();
-    }
+    await NotificationService.safeCancel(event.id!);
+    await DB.deleteEvent(event.id!);
+    await _loadEvents();
   }
 
   Future<void> _openDialog({Event? event}) async {
@@ -368,7 +457,7 @@ class _EventsPageState extends State<EventsPage> {
       } else {
         Future.delayed(
           const Duration(milliseconds: 100),
-          () => _searchFocus.requestFocus(),
+              () => _searchFocus.requestFocus(),
         );
       }
     });
@@ -396,12 +485,12 @@ class _EventsPageState extends State<EventsPage> {
                   Row(
                     children: [
                       Text(
-                        'Напоминалка',
+                        'Reminder & Notify',
                         style: TextStyle(
-                          fontSize: 28,
+                          fontSize: 22,
                           fontWeight: FontWeight.w700,
                           color: c.textPrimary,
-                          letterSpacing: -0.5,
+                          letterSpacing: -0.3,
                         ),
                       ),
                       const Spacer(),
@@ -410,15 +499,19 @@ class _EventsPageState extends State<EventsPage> {
                         active: _searchOpen,
                         onTap: _toggleSearch,
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       const _ThemeToggle(),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       _HeaderIcon(
                         icon: _hideDone
                             ? Icons.visibility_off_rounded
                             : Icons.visibility_rounded,
                         active: _hideDone,
-                        onTap: () => setState(() => _hideDone = !_hideDone),
+                        onTap: () async {
+                          setState(() => _hideDone = !_hideDone);
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setBool('hide_done', _hideDone);
+                        },
                       ),
                     ],
                   ),
@@ -488,24 +581,24 @@ class _EventsPageState extends State<EventsPage> {
             Expanded(
               child: visible.isEmpty
                   ? _EmptyState(
-                      allDone: _hideDone && _events.any((e) => e.isDone == 1),
-                      isSearch: _searchQuery.isNotEmpty,
-                    )
+                allDone: _hideDone && _events.any((e) => e.isDone == 1),
+                isSearch: _searchQuery.isNotEmpty,
+              )
                   : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                      itemCount: visible.length,
-                      itemBuilder: (ctx, i) {
-                        final event = visible[i];
-                        return _EventCard(
-                          event: event,
-                          now: now,
-                          onToggle: () => _toggleDone(event),
-                          onDelete: () => _deleteEvent(event),
-                          onSnooze: () => _snoozeEvent(event),
-                          onTap: () => _openDialog(event: event),
-                        );
-                      },
-                    ),
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                itemCount: visible.length,
+                itemBuilder: (ctx, i) {
+                  final event = visible[i];
+                  return _EventCard(
+                    event: event,
+                    now: now,
+                    onToggle: () => _toggleDone(event),
+                    onDelete: () => _deleteEvent(event),
+                    onSnooze: () => _snoozeEvent(event),
+                    onTap: () => _openDialog(event: event),
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -555,7 +648,7 @@ class _SnoozeSheet extends StatelessWidget {
           child: Icon(icon, color: c.snooze, size: 20),
         ),
         title: Text(label, style: TextStyle(
-          color: c.textPrimary, fontWeight: FontWeight.w500)),
+            color: c.textPrimary, fontWeight: FontWeight.w500)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         onTap: () => Navigator.pop(context, dur),
       );
@@ -697,22 +790,25 @@ class _EventCard extends StatelessWidget {
           key: Key('event_${event.id}'),
           confirmDismiss: (dir) async {
             if (dir == DismissDirection.endToStart) {
-              return await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => _ModernDialog(
-                      title: 'Удалить событие?',
-                      content: event.content,
-                      confirmText: 'Удалить',
-                      confirmColor: c.danger,
-                    ),
-                  ) ??
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => _ModernDialog(
+                  title: 'Удалить событие?',
+                  content: event.content,
+                  confirmText: 'Удалить',
+                  confirmColor: c.danger,
+                ),
+              ) ??
                   false;
+              if (confirmed) {
+                onDelete();
+              }
+              return false; // не даём Dismissible убирать виджет — onDelete сам перезагрузит список
             } else {
               onSnooze();
               return false;
             }
           },
-          onDismissed: (_) => onDelete(),
           secondaryBackground: Container(
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: 24),
@@ -767,7 +863,7 @@ class _EventCard extends StatelessWidget {
                               ),
                               child: isDone
                                   ? const Icon(Icons.check_rounded,
-                                      size: 16, color: Colors.white)
+                                  size: 16, color: Colors.white)
                                   : null,
                             ),
                           ),
@@ -785,7 +881,7 @@ class _EventCard extends StatelessWidget {
                                     fontWeight: FontWeight.w500,
                                     color: isDone ? c.textSecondary : c.textPrimary,
                                     decoration:
-                                        isDone ? TextDecoration.lineThrough : null,
+                                    isDone ? TextDecoration.lineThrough : null,
                                     decorationColor: c.textSecondary,
                                   ),
                                 ),
@@ -1045,6 +1141,8 @@ class EventFormPage extends StatefulWidget {
 class _EventFormPageState extends State<EventFormPage> {
   late TextEditingController _contentCtrl;
   bool _reminderEnabled = false;
+  bool _isListening = false;
+  final stt.SpeechToText _speech = stt.SpeechToText();
   DateTime? _selectedDateTime;
   bool _showCustomInterval = false;
   final _daysCtrl = TextEditingController(text: '0');
@@ -1098,6 +1196,7 @@ class _EventFormPageState extends State<EventFormPage> {
     final now = DateTime.now();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    // ── Дата (календарь) ──────────────────────────────
     final picked = await showDatePicker(
       context: context,
       locale: const Locale('ru'),
@@ -1108,13 +1207,13 @@ class _EventFormPageState extends State<EventFormPage> {
         data: Theme.of(ctx).copyWith(
           colorScheme: isDark
               ? ColorScheme.dark(
-                  primary: c.primary,
-                  onPrimary: Colors.white,
-                  surface: c.card)
+              primary: c.primary,
+              onPrimary: Colors.white,
+              surface: c.card)
               : ColorScheme.light(
-                  primary: c.primary,
-                  onPrimary: Colors.white,
-                  surface: Colors.white),
+              primary: c.primary,
+              onPrimary: Colors.white,
+              surface: Colors.white),
         ),
         child: child!,
       ),
@@ -1122,35 +1221,86 @@ class _EventFormPageState extends State<EventFormPage> {
     if (picked == null) return;
 
     if (!mounted) return;
-    final time = await showTimePicker(
+    TimeOfDay? time;
+    final initialTime = _selectedDateTime ?? now;
+    await showDialog(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(_selectedDateTime ?? now),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: isDark
-              ? ColorScheme.dark(
-                  primary: c.primary, onPrimary: Colors.white)
-              : ColorScheme.light(
-                  primary: c.primary, onPrimary: Colors.white),
-        ),
-        child: child!,
-      ),
+      builder: (ctx) {
+        final dc = AppColorScheme.of(ctx);
+        DateTime tempTime = DateTime(2000, 1, 1, initialTime.hour, initialTime.minute);
+        return Dialog(
+          backgroundColor: dc.card,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                child: Text('Выберите время',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: dc.textSecondary,
+                    )),
+              ),
+              SizedBox(
+                height: 320,
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.time,
+                  use24hFormat: true,
+                  initialDateTime: DateTime(2000, 1, 1, initialTime.hour, initialTime.minute),
+                  onDateTimeChanged: (dt) {
+                    tempTime = dt;
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text('Отмена',
+                          style: TextStyle(color: dc.primary)),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () {
+                        time = TimeOfDay(
+                          hour: tempTime.hour,
+                          minute: tempTime.minute,
+                        );
+                        Navigator.pop(ctx);
+                      },
+                      child: Text('OK',
+                          style: TextStyle(color: dc.primary)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
     if (time == null) return;
 
     final combined = DateTime(
-        picked.year, picked.month, picked.day, time.hour, time.minute);
+        picked.year, picked.month, picked.day, time!.hour, time!.minute);
     if (combined.isBefore(DateTime.now())) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Это время уже прошло — уведомление не придёт'),
+          content: const Text('Это время уже прошло — выберите другое'),
           backgroundColor: c.overdue,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
         ),
       );
+      return;
     }
     setState(() => _selectedDateTime = combined);
   }
@@ -1159,6 +1309,56 @@ class _EventFormPageState extends State<EventFormPage> {
     setState(() => _selectedDateTime = DateTime.now().add(delta));
   }
 
+  Future<void> _toggleListening() async {
+    if (_isListening) {
+      await _speech.stop();
+      setState(() => _isListening = false);
+      return;
+    }
+
+    final available = await _speech.initialize(
+      onStatus: (status) {
+        if (status == 'done' || status == 'notListening') {
+          setState(() => _isListening = false);
+        }
+      },
+      onError: (e) => setState(() => _isListening = false),
+    );
+    if (!available) return;
+
+    setState(() => _isListening = true);
+
+    await _speech.listen(
+      localeId: 'ru_RU',
+      partialResults: true,                    // для живой диктовки
+      listenFor: const Duration(seconds: 35),
+      cancelOnError: true,
+      onResult: (result) {
+        setState(() {
+          String displayText = result.recognizedWords;
+
+          // ←←← МАГИЯ ТОЛЬКО НА ФИНАЛЬНОМ РЕЗУЛЬТАТЕ ←←←
+          if (result.finalResult) {
+            final parsed = RussianDateParser.parse(result.recognizedWords);
+
+            displayText = parsed.text;           // очищенный текст ("Напомнить")
+
+            if (parsed.dateTime != null) {
+              _selectedDateTime = parsed.dateTime;
+              _reminderEnabled = true;
+            }
+            _isListening = false; // точно останавливаем
+          }
+
+          // Обновляем поле
+          _contentCtrl.text = displayText;
+          _contentCtrl.selection = TextSelection.fromPosition(
+            TextPosition(offset: _contentCtrl.text.length),
+          );
+        });
+      },
+    );
+  }
   Future<void> _save() async {
     final text = _contentCtrl.text.trim();
     if (text.isEmpty) return;
@@ -1230,7 +1430,7 @@ class _EventFormPageState extends State<EventFormPage> {
                 backgroundColor: c.primary,
                 foregroundColor: Colors.white,
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(9)),
                 minimumSize: Size.zero,
@@ -1239,7 +1439,7 @@ class _EventFormPageState extends State<EventFormPage> {
               child: Text(
                 _isEdit ? 'Сохранить' : 'Добавить',
                 style:
-                    const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
               ),
             ),
           ),
@@ -1251,33 +1451,66 @@ class _EventFormPageState extends State<EventFormPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // ── Поле ввода ─────────────────────────────────
-            Container(
-              decoration: BoxDecoration(
-                color: c.card,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: c.border.withValues(alpha: 0.5)),
-              ),
-              child: TextField(
-                controller: _contentCtrl,
-                autofocus: true,
-                maxLines: 2,
-                style: TextStyle(fontSize: 15, color: c.textPrimary),
-                decoration: InputDecoration(
-                  hintText: 'Что нужно запомнить?',
-                  hintStyle: TextStyle(
-                      color: c.textSecondary.withValues(alpha: 0.5)),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
+            IntrinsicHeight(
+             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: c.card,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: c.border.withValues(alpha: 0.5)),
+                    ),
+                    child: TextField(
+                      controller: _contentCtrl,
+                      autofocus: true,
+                      maxLines: 2,
+                      style: TextStyle(fontSize: 15, color: c.textPrimary),
+                      decoration: InputDecoration(
+                        hintText: 'Что нужно запомнить?',
+                        hintStyle: TextStyle(
+                            color: c.textSecondary.withValues(alpha: 0.5)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide(color: c.primary, width: 1.5),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                      ),
+                    ),
                   ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(color: c.primary, width: 1.5),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
                 ),
-              ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _toggleListening,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 46,
+                    decoration: BoxDecoration(
+                      color: _isListening
+                          ? c.danger.withValues(alpha: 0.12)
+                          : c.primarySurface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _isListening
+                            ? c.danger.withValues(alpha: 0.4)
+                            : c.primary.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Icon(
+                      _isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+                      color: _isListening ? c.danger : c.primary,
+                      size: 22,
+                    ),
+                  ),
+                ),
+              ],
+             ),
             ),
             const SizedBox(height: 10),
 
@@ -1322,19 +1555,19 @@ class _EventFormPageState extends State<EventFormPage> {
                                   : LabelColors.toColor(hex),
                               border: isSelected
                                   ? Border.all(
-                                      color: c.textPrimary, width: 2)
+                                  color: c.textPrimary, width: 2)
                                   : Border.all(
-                                      color:
-                                          c.border.withValues(alpha: 0.4),
-                                      width: 0.5),
+                                  color:
+                                  c.border.withValues(alpha: 0.4),
+                                  width: 0.5),
                             ),
                             child: isNone
                                 ? Icon(Icons.block_rounded,
-                                    size: 12, color: c.textSecondary)
+                                size: 12, color: c.textSecondary)
                                 : isSelected
-                                    ? const Icon(Icons.check_rounded,
-                                        size: 12, color: Colors.white)
-                                    : null,
+                                ? const Icon(Icons.check_rounded,
+                                size: 12, color: Colors.white)
+                                : null,
                           ),
                         );
                       }).toList(),
@@ -1433,19 +1666,19 @@ class _EventFormPageState extends State<EventFormPage> {
                           label: 'Интервал',
                           active: _showCustomInterval,
                           onTap: () => setState(() =>
-                              _showCustomInterval = !_showCustomInterval),
+                          _showCustomInterval = !_showCustomInterval),
                           c: c,
                         ),
                         if (_selectedDateTime != null) ...[
                           const SizedBox(width: 6),
                           GestureDetector(
                             onTap: () => setState(
-                                () => _selectedDateTime = null),
+                                    () => _selectedDateTime = null),
                             child: Container(
                               padding: const EdgeInsets.all(9),
                               decoration: BoxDecoration(
                                 color:
-                                    c.danger.withValues(alpha: 0.08),
+                                c.danger.withValues(alpha: 0.08),
                                 borderRadius: BorderRadius.circular(9),
                               ),
                               child: Icon(Icons.close_rounded,
@@ -1491,7 +1724,7 @@ class _EventFormPageState extends State<EventFormPage> {
                                       vertical: 10),
                                   shape: RoundedRectangleBorder(
                                     borderRadius:
-                                        BorderRadius.circular(10),
+                                    BorderRadius.circular(10),
                                   ),
                                 ),
                                 child: const Text('Установить',
@@ -1507,62 +1740,6 @@ class _EventFormPageState extends State<EventFormPage> {
                           ? CrossFadeState.showSecond
                           : CrossFadeState.showFirst,
                       duration: const Duration(milliseconds: 220),
-                    ),
-
-                    const SizedBox(height: 12),
-                    Divider(color: c.divider, height: 1),
-                    const SizedBox(height: 12),
-
-                    // ── Повторение ─────────────────────────
-                    Row(
-                      children: RecurrenceOption.all.map((opt) {
-                        final isSelected =
-                            _selectedRecurrence == opt.value;
-                        return Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(
-                                () => _selectedRecurrence = opt.value),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              margin: EdgeInsets.only(
-                                  right: opt != RecurrenceOption.all.last
-                                      ? 6
-                                      : 0),
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? c.primary.withValues(alpha: 0.12)
-                                    : c.primarySurface,
-                                borderRadius: BorderRadius.circular(9),
-                                border: Border.all(
-                                  color: isSelected
-                                      ? c.primary.withValues(alpha: 0.4)
-                                      : c.primary.withValues(alpha: 0.1),
-                                ),
-                              ),
-                              child: Column(
-                                children: [
-                                  Icon(opt.icon,
-                                      size: 16,
-                                      color: isSelected
-                                          ? c.primary
-                                          : c.textSecondary),
-                                  const SizedBox(height: 3),
-                                  Text(opt.label,
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: isSelected
-                                            ? c.primary
-                                            : c.textSecondary,
-                                      )),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
                     ),
                   ],
                 ],
@@ -1599,7 +1776,7 @@ class _CompactBtn extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: active
               ? c.primary.withValues(alpha: 0.1)
