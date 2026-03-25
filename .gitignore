@@ -44,3 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 /android/key.properties
+
+# Claude Code — не публиковать
+.claude/
+CLAUDE.md
