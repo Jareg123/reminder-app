@@ -86,7 +86,7 @@ class DB {
 
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE events (
@@ -98,6 +98,12 @@ class DB {
             is_done INTEGER DEFAULT 0,
             recurrence TEXT,
             label_color TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE daily_stats (
+            date TEXT PRIMARY KEY,
+            completed_tasks INTEGER DEFAULT 0
           )
         ''');
       },
@@ -119,6 +125,14 @@ class DB {
           if (!colNames.contains('label_color')) {
             await db.execute("ALTER TABLE events ADD COLUMN label_color TEXT");
           }
+        }
+        if (oldVersion < 5) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS daily_stats (
+              date TEXT PRIMARY KEY,
+              completed_tasks INTEGER DEFAULT 0
+            )
+          ''');
         }
       },
     );
@@ -149,7 +163,10 @@ class DB {
 
   static Future<List<Event>> getAll() async {
     final db = await database;
-    final maps = await db.query('events', orderBy: 'id DESC');
+    final maps = await db.query(
+      'events',
+      orderBy: "CASE WHEN reminder_at IS NULL THEN 1 ELSE 0 END, reminder_at ASC, id DESC",
+    );
     return maps.map((m) => Event.fromMap(m)).toList();
   }
 
@@ -185,6 +202,18 @@ class DB {
     await db.update('events', data, where: 'id = ?', whereArgs: [id]);
   }
 
+  static Future<Event?> getById(int id) async {
+    final db = await database;
+    final maps = await db.query('events', where: 'id = ?', whereArgs: [id]);
+    if (maps.isEmpty) return null;
+    return Event.fromMap(maps.first);
+  }
+
+  static Future<void> markDoneById(int id) async {
+    final db = await database;
+    await db.update('events', {'is_done': 1}, where: 'id = ?', whereArgs: [id]);
+  }
+
   /// Обновляет только reminder_at — для авто-перепланирования и откладывания
   static Future<void> updateReminderAt(int id, String reminderAt) async {
     final db = await database;
@@ -194,5 +223,64 @@ class DB {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  static String _todayStr() {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  static Future<void> recordTaskCompleted() async {
+    final db = await database;
+    final today = _todayStr();
+    await db.rawInsert(
+      'INSERT OR IGNORE INTO daily_stats (date, completed_tasks) VALUES (?, 0)',
+      [today],
+    );
+    await db.rawUpdate(
+      'UPDATE daily_stats SET completed_tasks = completed_tasks + 1 WHERE date = ?',
+      [today],
+    );
+  }
+
+  static Future<int> getStreak() async {
+    final db = await database;
+    final rows = await db.query('daily_stats', orderBy: 'date DESC');
+    final Map<String, int> byDate = {};
+    for (final row in rows) {
+      byDate[row['date'] as String] = row['completed_tasks'] as int;
+    }
+    int streak = 0;
+    var checkDate = DateTime.now();
+    final today = _todayStr();
+    if ((byDate[today] ?? 0) == 0) {
+      checkDate = checkDate.subtract(const Duration(days: 1));
+    }
+    while (true) {
+      final d = checkDate;
+      final dateStr = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      if ((byDate[dateStr] ?? 0) > 0) {
+        streak++;
+        checkDate = checkDate.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  static Future<int> getWeeklyCompletedCount() async {
+    final db = await database;
+    final now = DateTime.now();
+    final dates = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: i + 1));
+      return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    });
+    final placeholders = List.filled(7, '?').join(',');
+    final result = await db.rawQuery(
+      'SELECT SUM(completed_tasks) as total FROM daily_stats WHERE date IN ($placeholders)',
+      dates,
+    );
+    return (result.first['total'] as int?) ?? 0;
   }
 }

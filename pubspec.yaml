@@ -1,7 +1,7 @@
 name: reminder_app
 description: Minimal Tracker
 publish_to: 'none'
-version: 1.2.1+4
+version: 1.2.2+8
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -20,6 +20,7 @@ dependencies:
     sdk: flutter
   permission_handler: ^11.3.1
   home_widget: ^0.7.0
+  confetti: ^0.7.0
 
 dev_dependencies:
   flutter_test:

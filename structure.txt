@@ -1,0 +1,133 @@
+════════════════════════════════════════════════════════════════
+  СТРУКТУРА ПРОЕКТА — Reminder & Notify
+  Обновлено: 2026-03-23
+════════════════════════════════════════════════════════════════
+
+lib/
+│
+├── main.dart
+│     Точка входа. main() + MyApp (корневой виджет).
+│     Инициализация уведомлений, загрузка темы из SharedPreferences,
+│     перепланирование всех уведомлений при старте.
+│     Тема слушается через ValueListenableBuilder → themeNotifier.
+│
+├── database.dart
+│     SQLite база данных.
+│     Классы: Event (модель), DB (статические методы: getAll, addEvent,
+│     updateEvent, deleteEvent, toggleDone, updateReminderAt).
+│     Версия БД: 4 (миграции: is_done → recurrence → label_color).
+│
+├── notification_service.dart
+│     Планирование push-уведомлений (flutter_local_notifications).
+│     Методы: init, safeSchedule, safeCancel, rescheduleAll.
+│     Учитывает timezone (flutter_timezone).
+│
+├── date_parser.dart
+│     Парсер дат из русского текста для голосового ввода.
+│     Класс: RussianDateParser.parse(text) → {text, dateTime?}.
+│     Используется в EventFormPage при голосовом вводе.
+│
+├── theme/
+│   └── app_theme.dart
+│         Всё что связано с цветами и константами UI.
+│         • themeNotifier — глобальный ValueNotifier<ThemeMode>
+│         • LabelColors   — 6 цветных меток + null (без метки)
+│         • RecurrenceOption — варианты повторения (нет/час/день/неделя)
+│         • AppColorScheme — палитра light/dark, вызов: AppColorScheme.of(ctx)
+│
+├── pages/
+│   ├── events_page.dart
+│   │     ГЛАВНЫЙ ЭКРАН — список задач.
+│   │     Класс: EventsPage (StatefulWidget).
+│   │     Функции: загрузка из БД, поиск, фильтр выполненных,
+│   │     прогресс-бар, мультивыбор, откладывание, обновление home widget,
+│   │     запрос исключения из battery optimization (Android).
+│   │
+│   └── event_form_page.dart
+│         ФОРМА создания и редактирования задачи.
+│         Класс: EventFormPage (StatefulWidget, принимает Event? event).
+│         Функции: текст, голосовой ввод (ru_RU + RussianDateParser),
+│         цветная метка, напоминание (быстрые интервалы + кастомный + календарь),
+│         повторение (RecurrenceOption).
+│
+└── widgets/
+    ├── event_card.dart
+    │     Карточка одной задачи в списке.
+    │     Класс: EventCard.
+    │     Свайп влево → удалить, вправо → отложить.
+    │     Долгий тап → мультивыбор. Анимированный чекбокс.
+    │
+    ├── snooze_sheet.dart
+    │     Bottom sheet "Отложить" (появляется при свайпе карточки вправо).
+    │     Класс: SnoozeSheet. Варианты: 30 мин / 1 час / 4 часа / до завтра.
+    │     Возвращает Duration.
+    │
+    ├── reschedule_sheet.dart
+    │     Bottom sheet "Перенести задачи" (из панели мультивыбора).
+    │     Классы: RescheduleSheet, RescheduleField (поле ввода числа).
+    │     Варианты: +1ч / +4ч / +1 сутки / +1 неделя / своё время.
+    │     Возвращает Duration?.
+    │
+    ├── modern_dialog.dart
+    │     Универсальный диалог подтверждения.
+    │     Класс: ModernDialog (title, content, confirmText, confirmColor).
+    │     Возвращает bool? через Navigator.pop.
+    │
+    ├── multi_select_bar.dart
+    │     Панель действий при мультивыборе (заменяет FAB).
+    │     Класс: MultiSelectBar.
+    │     Кнопки: Готово / Перенести / Удалить + счётчик выбранных.
+    │
+    ├── header_widgets.dart
+    │     Виджеты шапки главного экрана.
+    │     • HeaderIcon  — иконка-кнопка (поиск, видимость…)
+    │     • ThemeToggle — переключатель light/dark (сохраняет в SharedPreferences)
+    │
+    ├── empty_state.dart
+    │     Заглушка для пустого списка.
+    │     Класс: EmptyState (allDone, isSearch).
+    │     3 режима: пусто / всё выполнено / ничего не найдено.
+    │
+    └── form_widgets.dart
+          Виджеты формы EventFormPage.
+          • CompactBtn    — кнопка "Дата и время" / "Интервал"
+          • QuickButton   — быстрые интервалы (1ч / 4ч / 8ч / Завтра)
+          • IntervalField — поле ввода числа (дни / часы / минуты)
+
+════════════════════════════════════════════════════════════════
+  ANDROID
+════════════════════════════════════════════════════════════════
+
+android/app/
+├── build.gradle.kts              — версии SDK, зависимости
+├── proguard-rules.pro            — правила ProGuard для релиза
+└── src/main/
+    ├── AndroidManifest.xml       — разрешения: уведомления, будильник, battery
+    ├── kotlin/com/example/
+    │   └── HomeWidgetProvider.kt — провайдер home screen виджета
+    └── res/
+        └── layout/
+            └── home_widget.xml   — вёрстка home screen виджета
+
+════════════════════════════════════════════════════════════════
+  ПРОЧЕЕ
+════════════════════════════════════════════════════════════════
+
+pubspec.yaml          — зависимости Flutter
+structure.txt         — этот файл
+lib/Эталон/           — резервные копии старых версий файлов
+                        (не используются в сборке)
+
+════════════════════════════════════════════════════════════════
+  КЛЮЧЕВЫЕ ЗАВИСИМОСТИ
+════════════════════════════════════════════════════════════════
+
+sqflite                      — SQLite база данных
+flutter_local_notifications  — push-уведомления
+flutter_timezone             — timezone для точного планирования
+permission_handler           — разрешения (battery optimization)
+speech_to_text               — голосовой ввод (ru_RU)
+home_widget                  — виджет на рабочем столе Android
+shared_preferences           — хранение настроек (тема, hide_done)
+intl                         — форматирование дат
+flutter_localizations        — локализация (ru)

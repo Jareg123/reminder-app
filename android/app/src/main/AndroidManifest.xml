@@ -78,7 +78,12 @@
             android:name="flutterEmbedding"
             android:value="2"/>
 
-        <!-- Виджет маленький -->
+        <!-- Кнопка "Готово" в виджете -->
+        <receiver
+            android:name=".WidgetDoneReceiver"
+            android:exported="false"/>
+
+        <!-- Виджет -->
         <receiver
             android:name=".HomeWidgetProvider"
             android:exported="true">

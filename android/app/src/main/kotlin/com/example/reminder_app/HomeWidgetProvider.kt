@@ -1,4 +1,4 @@
-package com.gladkov.reminder
+package com.example.reminder_app
 
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
@@ -25,9 +25,10 @@ class HomeWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+
+        /** Форматирует "2026-03-15 14:30" → "14:30" / "Завтра 09:00" / "16 мар 14:30" / "Просрочено" */
         private fun formatTime(raw: String?, isOverdue: Boolean): String {
             if (raw.isNullOrEmpty()) return ""
-            // Проверяем просрочку прямо здесь, не только по флагу из Flutter
             try {
                 val parts = raw.split(" ")
                 if (parts.size >= 2) {
@@ -49,31 +50,21 @@ class HomeWidgetProvider : AppWidgetProvider() {
                 if (parts.size < 2) return raw
                 val datePart = parts[0]
                 val timePart = parts[1]
-
                 val dParts = datePart.split("-")
                 if (dParts.size < 3) return timePart
-
                 val year = dParts[0].toInt()
                 val month = dParts[1].toInt()
                 val day = dParts[2].toInt()
-
                 val now = java.util.Calendar.getInstance()
                 val todayYear = now.get(java.util.Calendar.YEAR)
                 val todayMonth = now.get(java.util.Calendar.MONTH) + 1
                 val todayDay = now.get(java.util.Calendar.DAY_OF_MONTH)
-
-                if (year == todayYear && month == todayMonth && day == todayDay) {
-                    return timePart
-                }
-
+                if (year == todayYear && month == todayMonth && day == todayDay) return timePart
                 now.add(java.util.Calendar.DAY_OF_MONTH, 1)
                 val tmrYear = now.get(java.util.Calendar.YEAR)
                 val tmrMonth = now.get(java.util.Calendar.MONTH) + 1
                 val tmrDay = now.get(java.util.Calendar.DAY_OF_MONTH)
-                if (year == tmrYear && month == tmrMonth && day == tmrDay) {
-                    return "Завтра $timePart"
-                }
-
+                if (year == tmrYear && month == tmrMonth && day == tmrDay) return "Завтра $timePart"
                 val months = arrayOf("", "янв", "фев", "мар", "апр", "май", "июн",
                     "июл", "авг", "сен", "окт", "ноя", "дек")
                 val mName = if (month in 1..12) months[month] else "$month"
@@ -85,14 +76,10 @@ class HomeWidgetProvider : AppWidgetProvider() {
 
         private fun parseColor(hex: String?, fallback: Int): Int {
             if (hex.isNullOrEmpty()) return fallback
-            return try {
-                Color.parseColor("#FF$hex")
-            } catch (e: Exception) {
-                fallback
-            }
+            return try { Color.parseColor("#FF$hex") } catch (e: Exception) { fallback }
         }
 
-        private fun updateWidget(
+        fun updateWidget(
             context: Context,
             appWidgetManager: AppWidgetManager,
             appWidgetId: Int
@@ -101,68 +88,81 @@ class HomeWidgetProvider : AppWidgetProvider() {
                 "HomeWidgetPreferences", Context.MODE_PRIVATE
             )
 
-            // Тёмная тема?
             val isDark = (context.resources.configuration.uiMode and
                     Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
-            val titles = Array(5) { i -> prefs.getString("task_title_$i", null) }
-            val times  = Array(5) { i -> prefs.getString("task_time_$i", null) }
-            val colors = Array(5) { i -> prefs.getString("task_color_$i", null) }
+            val titles    = Array(5) { i -> prefs.getString("task_title_$i", null) }
+            val times     = Array(5) { i -> prefs.getString("task_time_$i", null) }
+            val colors    = Array(5) { i -> prefs.getString("task_color_$i", null) }
+            val taskIds   = Array(5) { i -> prefs.getInt("task_id_$i", 0) }
             val taskCount = prefs.getInt("task_count", 0)
+            val doneCount = prefs.getInt("done_count", 0)
+            val totalCount = prefs.getInt("total_count", 0)
 
-            val intent = Intent(Intent.ACTION_MAIN).apply {
+            // Тап по всему виджету → открыть приложение
+            val openIntent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
-                component = ComponentName(context.packageName, "com.gladkov.reminder.MainActivity")
+                component = ComponentName(context.packageName, "${context.packageName}.MainActivity")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
-
-            val pendingIntent = PendingIntent.getActivity(
-                context, appWidgetId, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            val openPending = PendingIntent.getActivity(
+                context, appWidgetId, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
             val views = RemoteViews(context.packageName, R.layout.widget_medium)
-            views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+            views.setOnClickPendingIntent(R.id.widget_root, openPending)
 
-            // Цвета в зависимости от темы
-            val defaultTextColor = if (isDark) Color.parseColor("#FFF5F5F7") else Color.parseColor("#FF000000")
-            val greenColor = if (isDark) Color.parseColor("#FF34D399") else Color.parseColor("#FF10B981")
-            val secondaryColor = if (isDark) Color.parseColor("#FF8E8E93") else Color.parseColor("#FF8E8E93")
-            val dividerColor = if (isDark) Color.parseColor("#FF3A3A3C") else Color.parseColor("#FFE8E8E8")
+            val defaultTextColor = if (isDark) Color.parseColor("#FFF5F5F7") else Color.parseColor("#FF1D1D1F")
+            val greenColor       = if (isDark) Color.parseColor("#FF34D399") else Color.parseColor("#FF10B981")
+            val secondaryColor   = Color.parseColor("#FF8E8E93")
 
-            // Заголовок со счётчиком
+            // Заголовок
             val headerText = if (taskCount > 0) "Задачи · $taskCount" else "Задачи"
             views.setTextViewText(R.id.widget_title, headerText)
             views.setTextColor(R.id.widget_title, greenColor)
-            views.setTextColor(R.id.widget_divider, dividerColor)
             views.setTextColor(R.id.empty_text, secondaryColor)
+
+            // Прогресс-бар
+            val progress = if (totalCount > 0) (doneCount * 100 / totalCount) else 0
+            views.setProgressBar(R.id.widget_progress, 100, progress, false)
 
             val rowIds   = intArrayOf(R.id.row1, R.id.row2, R.id.row3, R.id.row4, R.id.row5)
             val titleIds = intArrayOf(R.id.title1, R.id.title2, R.id.title3, R.id.title4, R.id.title5)
             val timeIds  = intArrayOf(R.id.time1, R.id.time2, R.id.time3, R.id.time4, R.id.time5)
-            val dotIds   = intArrayOf(R.id.dot1, R.id.dot2, R.id.dot3, R.id.dot4, R.id.dot5)
-
+            val checkIds = intArrayOf(R.id.check1, R.id.check2, R.id.check3, R.id.check4, R.id.check5)
             val overdueHex = "FF6B35"
 
             var hasAny = false
             for (i in 0..4) {
                 if (!titles[i].isNullOrEmpty()) {
                     val isOverdue = colors[i] == overdueHex
+                    val taskColor = if (colors[i] != null && colors[i] != "1D1D1F")
+                        parseColor(colors[i], defaultTextColor)
+                    else defaultTextColor
 
                     views.setTextViewText(titleIds[i], titles[i])
+                    views.setTextColor(titleIds[i], taskColor)
                     views.setTextViewText(timeIds[i], formatTime(times[i], isOverdue))
+                    views.setTextColor(timeIds[i], if (isOverdue) Color.parseColor("#FFFF6B35") else greenColor)
+                    views.setTextColor(checkIds[i], greenColor)
                     views.setViewVisibility(rowIds[i], View.VISIBLE)
 
-                    // Цвет задачи
-                    val taskColor = if (colors[i] != null && colors[i] != "1D1D1F") {
-                        parseColor(colors[i], defaultTextColor)
-                    } else {
-                        defaultTextColor
+                    // Кнопка "○ Готово" для каждой задачи
+                    val tid = taskIds[i]
+                    if (tid > 0) {
+                        val doneIntent = Intent(context, WidgetDoneReceiver::class.java).apply {
+                            action = "WIDGET_DONE_$tid"
+                            putExtra("task_id", tid)
+                        }
+                        val donePending = PendingIntent.getBroadcast(
+                            context,
+                            appWidgetId * 10 + i,
+                            doneIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                        views.setOnClickPendingIntent(checkIds[i], donePending)
                     }
-
-                    views.setTextColor(titleIds[i], taskColor)
-                    views.setTextColor(dotIds[i], taskColor)
-                    views.setTextColor(timeIds[i], if (isOverdue) taskColor else greenColor)
 
                     hasAny = true
                 } else {
@@ -171,7 +171,6 @@ class HomeWidgetProvider : AppWidgetProvider() {
             }
 
             views.setViewVisibility(R.id.empty_text, if (hasAny) View.GONE else View.VISIBLE)
-
             appWidgetManager.updateAppWidget(appWidgetId, views)
         }
     }

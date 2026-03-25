@@ -13,7 +13,7 @@ plugins {
 }
 
 android {
-    namespace = "com.gladkov.reminder"
+    namespace = "com.example.reminder_app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
